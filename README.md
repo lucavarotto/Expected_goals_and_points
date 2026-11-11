@@ -52,7 +52,7 @@ so the working directory does not matter.
 ## Repository structure
 
 ```
-Tesi_triennale/
+Expected_goals_and_points/
 ├── Codice/                          the analysis, one file per stage above
 ├── creazione_dataset/               the three scrapers (their output stays local)
 ├── Figures/                         figures produced by the .Rmd files
