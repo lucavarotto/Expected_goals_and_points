@@ -1,7 +1,11 @@
 # Dati: restano nella cartella di lavoro locale
 Dataset_ausiliari/
 RF_pred/
-creazione_dataset/
+# di creazione_dataset/ si pubblicano gli scraper, non i dati scaricati
+creazione_dataset/**
+!creazione_dataset/**/
+!creazione_dataset/**/*.py
+!creazione_dataset/**/*.R
 
 # Paper di riferimento di terzi: si citano, non si ridistribuiscono
 Paper/
