@@ -1,0 +1,157 @@
+---
+title: "Random Forest cv"
+author: "Luca Varotto"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 2
+    number_section: TRUE
+    highlight: tango
+lang: ita
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+```{r}
+rm(list=ls())
+hp_list <- list(n_estimators = c(250,500,1000),
+                           max_depth = c(5,8,15,20),
+                           max_features=1:4)
+
+hp_list <- list(n_estimators = c(10,20),
+                           max_depth = c(3,5),
+                           max_features=1:2)
+
+cm_and_fscore <- function(probs){
+  
+  library(pROC)
+  my_roc <- roc(dat_test$goal_YN, probs)
+  auc <- pROC::auc(my_roc)
+  cat("AUC:", auc, "\n\n")
+  threshold <- coords(my_roc, "best", ret = "threshold",
+         best.method="closest.topleft", best.weights=c(1,mean(dat_test$goal_YN==1))) %>% as.numeric()
+  
+  cat("Soglia:", threshold, "\n\n")
+  
+  cat("\n-------------------------")
+  Fitted_goal <-  ifelse(probs >= threshold, 1, 0)
+  
+  f_score <- tibble(t=as.factor(dat_test$goal_YN),
+       e=factor(Fitted_goal, levels=c(0,1))) %>% f_meas(truth=t,
+                  estimate=e, event_level = "second") %>% dplyr::select(.estimate) %>% as.numeric()
+  cat("f-score:", f_score, "\n\n")
+  
+  caret::confusionMatrix(data=as.factor(Fitted_goal), reference=as.factor(dat_test$goal_YN))
+}
+```
+
+# Dati undersampled
+
+```{r undersampled}
+load("../Dataset_ausiliari/dat_undersampled.Rdata")
+glimpse(dat_undersampled)
+table(dat_undersampled$goal_YN)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+source("my_randomForest2.R")
+debug(cv_random_forest)
+Us2 <- cv_random_forest(train = dat_undersampled %>%
+                  mutate(goal_YN=factor(goal_YN,
+                              levels=c(1,0), labels=c("1", "0"))),
+            test = dat_test,
+            hp_list = hp_list,
+            n_folds = 5)
+rm(dat_undersampled)
+
+cm_and_fscore(probs = Us2)
+
+save(Us2, file="../RF_pred/RF_undersampling2.Rdata")
+rm(Us2)
+```
+
+
+# Dati originali
+
+Primo approccio
+
+```{r Dati originali}
+load("../Dataset_ausiliari/dat_cleaned.Rdata")
+load("../Dataset_ausiliari/dat_test.Rdata")
+str(dat_cleaned)
+str(dat_test)
+table(dat_cleaned$goal_YN)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+source("my_randomForest2.R")
+Og2 <- cv_random_forest(train = dat_cleaned,
+            test = dat_test,
+            hp_list = hp_list,
+            n_folds = 5)
+rm(dat_cleaned)
+
+tibble(t=as.factor(dat_test$goal_YN),
+        e=factor(Og2$pred, levels=c(0,1))) %>%
+      yardstick::f_meas(truth=t, estimate=e, event_level = "second")
+
+save(Og2, file="../RF_pred/RF_originali2.Rdata")
+rm(Og2)
+```
+
+# Dati oversampled
+
+```{r oversampled}
+load("../Dataset_ausiliari/dat_oversampled.Rdata")
+glimpse(dat_oversampled)
+table(dat_oversampled$goal_YN)
+```
+
+```{r eval=FALSE, include=FALSE}
+source("my_randomForest2.R")
+
+Os2 <- cv_random_forest(train = dat_oversampled,
+            test = dat_test,
+            hp_list = hp_list,
+            n_folds = 5)
+rm(dat_oversampled)
+
+tibble(t=as.factor(dat_test$goal_YN),
+        e=factor(Os2$pred, levels=c(0,1))) %>%
+      yardstick::f_meas(truth=t, estimate=e, event_level = "second")
+save(Os2, file="../RF_pred/RF_oversampling2.Rdata")
+rm(Os2)
+```
+
+# Dati SMOTE
+
+```{r SMOTE}
+load("../Dataset_ausiliari/dat_smoothed_k11.Rdata")
+load("../Dataset_ausiliari/dat_test.Rdata")
+glimpse(dat_smoothed)
+table(dat_smoothed$goal_YN)
+```
+
+```{r eval=FALSE, include=FALSE}
+source("my_randomForest2.R")
+
+SM2 <- cv_random_forest(train = dat_smoothed,
+            test = dat_test,
+            hp_list = hp_list,
+            n_folds = 5)
+rm(dat_smoothed)
+
+tibble(t=as.factor(dat_test$goal_YN),
+        e=factor(SM2$pred, levels=c(0,1))) %>%
+      yardstick::f_meas(truth=t, estimate=e, event_level = "second")
+
+save(SM2, file="../RF_pred/RF_smoote2.Rdata")
+rm(SM2)
+```

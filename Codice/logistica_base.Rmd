@@ -1,0 +1,70 @@
+---
+title: "Random Forest Classifier"
+author: "Luca Varotto"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 2
+    number_section: TRUE
+    highlight: tango
+lang: ita
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+knitr::opts_chunk$set(fig.path = "../Figures/logistica_base/")
+```
+
+# Dati undersampled
+
+```{r soccer_field_probs_overs}
+rm(list=ls())
+load("../Dataset_ausiliari/dat_oversampled.Rdata")
+load("../Dataset_ausiliari/dat_test.Rdata")
+glimpse(dat_oversampled)
+table(dat_oversampled$goal_YN)
+
+glm_base <- glm(goal_YN ~ goal_distance + shot_angle_degree, family=binomial, data=dat_oversampled)
+summary(glm_base)
+exp(coef(glm_base))
+prob_glm_base <- predict(glm_base, newdata=dat_test,
+                         type="response")
+
+anova(glm(goal_YN ~ 1, family=binomial, data=dat_oversampled), glm_base, test="Chisq")
+
+x_pos <- cbind(matrix(seq(40, 0.1, length.out = 200), nrow=1), matrix(seq(0.1, 40, length.out = 200), nrow=1))
+y_pos <- matrix(seq(120,0+1/10000, length.out = 800), ncol=1)
+
+dist_pos <- outer(x_pos, y_pos, function(x,y) sqrt(x^2+y^2))
+dist_pos <- matrix(dist_pos, ncol=400, byrow=T)
+
+degree_pos <- outer(x_pos, y_pos, function(x,y) atan(y/x)*180/pi)
+degree_pos <- matrix(degree_pos, ncol=400, byrow=T)
+
+ris <- matrix(0, ncol=400, nrow=nrow(degree_pos))
+
+for (i in 1:400){
+  ris[,i] = predict(glm_base, newdata=data.frame(goal_distance=dist_pos[,i], shot_angle_degree=degree_pos[,i]), type="response")
+}
+
+library(ggsoccer)
+colnames(ris) <- as.character(seq(0, 100, length.out=400))
+rownames(ris) <- as.character(seq(0, 100, length.out = 800))
+
+df <- data.frame(
+  rown = rep(as.numeric(rownames(ris)), 400),
+  coln = rep(as.numeric(colnames(ris)), each = 800),
+  probabilità = as.vector(ris)
+)
+
+set.seed(123)
+df %>%
+  ggplot(aes(x = rown, y = coln, fill = probabilità)) +
+  geom_raster() +
+  scale_fill_viridis_c(option = "D") +
+  annotate_pitch(alpha=0) + 
+  theme_pitch()
+```

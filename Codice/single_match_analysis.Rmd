@@ -1,0 +1,163 @@
+---
+title: "single_match_analysis"
+author: "Luca Varotto"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.path = "../Figures/single_match/")
+library(tidyverse)
+```
+
+# load dati
+
+```{r}
+rm(list=ls())
+gc()
+load("../Dataset_ausiliari/dat_test_full.Rdata")
+load("../Dataset_ausiliari/dat_cleaned.Rdata")
+
+logistica0 <- glm(goal_YN~., data=dat_cleaned, family=binomial)
+summary(logistica0)
+prob_log0 <- predict(logistica0, type="response", newdata=dat_test)
+
+res <- read_csv("../creazione_dataset/games_results/serieA_2015_16_games_results.csv")
+res %>% filter(home_team=="Napoli", away_team=="Juventus")
+rm(res)
+gc()
+```
+
+
+# Shots map
+
+```{r nap-j-shots}
+nap_j <- dat_test %>% mutate(my_xg=prob_log0) %>% filter(match_id=="3879548")
+nap_j
+library(ggsoccer)
+pitch_opta[["length"]] <-  120
+pitch_opta[["width"]] <-  80
+
+nap_j %>% filter(my_xg >= 0.18) %>% view
+nap_j %>% group_by(team) %>% summarise(xg_tot=sum(my_xg))
+
+nap_j_shots <- ggplot(nap_j) +
+  annotate_pitch(colour = "white",
+                 fill   = "springgreen4",
+                 limits = FALSE,
+                 dimensions = pitch_opta) +
+  geom_point(aes(x = depth_coordinate,
+                 y = width_coordinate,
+                 size = (my_xg * 5),
+                 shape = as.factor(ifelse(goal_YN == 1, "Goal", "No Goal")),
+                 colour = as.factor(team)),
+             stroke = 2) +
+  scale_shape_manual(name = "Esito del tiro", values = c("Goal" = 8, "No Goal" = 16)) +
+  scale_colour_manual(name = "Squadra", values = c("Napoli" = "dodgerblue", "Juventus" = "white")) +
+  scale_size_continuous(name = "Expected Goals (xG)",
+                        labels = function(x) round(x / 5, 3)) +  # Adjust legend labels
+  theme_pitch() +
+  theme(panel.background = element_rect(fill = "springgreen4")) +
+  annotate("segment", x = 65, y = 83, xend = 115, yend = 83,
+           arrow = arrow(length = unit(0.4, "cm")),
+           linewidth = 1) +
+  coord_cartesian(xlim = c(60, 120))
+
+nap_j_shots
+```
+
+# xg cumulati
+
+```{r xg_overtime}
+nap_j <- dat_test %>% mutate(my_xg=prob_log0) %>% filter(match_id=="3879548")
+
+nap_j_1h <- nap_j[1:9,]
+nap_j_2h <- nap_j[10:26,]
+
+nap_j_1h$timestamp <- strptime(nap_j_1h$timestamp, format="%H:%M:%OS") %>% as.numeric()
+nap_j_2h$timestamp <- strptime(nap_j_2h$timestamp, format="%H:%M:%OS") %>% as.numeric() + 47*60
+
+nap_j <- rbind(nap_j_1h, nap_j_2h)
+
+seconds_from_start <- function(t){
+  (121+ as.numeric(t) - as.numeric(nap_j$timestamp[1])) / 60
+}
+
+nap_j$timestamp <- nap_j$timestamp %>% seconds_from_start()
+
+nap_j <- nap_j %>%
+  add_row(nap_j[1,] %>%
+        mutate(timestamp=0, team="Juventus", my_xg=0),.before = 1) %>%
+  
+  add_row(nap_j[1,] %>%
+        mutate(timestamp=0, team="Napoli", my_xg=0),.before = 1)
+
+
+# Calculate cumulative xG for each team
+nap_j <- nap_j %>%
+  group_by(team) %>%
+  arrange(timestamp) %>%
+  mutate(cum_xg = cumsum(my_xg)) %>%
+  ungroup()
+
+# Function to create Manhattan segments
+manhattan_segments <- function(data) {
+  data %>%
+    arrange(timestamp) %>%
+    mutate(x_start = lag(timestamp, default = first(timestamp)),
+           x_end = timestamp,
+           y_start = lag(cum_xg, default = first(cum_xg)),
+           y_end = cum_xg) %>%
+    select(team, x_start, x_end, y_start, y_end)
+}
+
+# Create the segments for both teams
+segments_juve <- manhattan_segments(nap_j %>% filter(team == "Juventus"))
+segments_napoli <- manhattan_segments(nap_j %>% filter(team == "Napoli"))
+
+library(ggdark)
+
+xg_overtime <- ggplot(nap_j %>% filter(team == "Juventus")) +
+
+  geom_segment(data = segments_juve,
+               aes(x = x_start, xend = x_end, y = y_start, yend = y_start),
+               colour = "white", size = 1) +
+  
+  geom_segment(data = segments_juve,
+               aes(x = x_end, xend = x_end, y = y_start, yend = y_end),
+               colour = "white", size = 1) +
+  
+  geom_point(aes(x = timestamp, y = cumsum(my_xg),
+                 shape = as.factor(ifelse(goal_YN == 1, "Goal", "No Goal")), 
+                 colour = as.factor(team)), 
+             size = 3) +
+
+  geom_segment(data = segments_napoli,
+               aes(x = x_start, xend = x_end, y = y_start, yend = y_start),
+               colour = "dodgerblue", size = 1) +
+  
+  geom_segment(data = segments_napoli,
+               aes(x = x_end, xend = x_end, y = y_start, yend = y_end),
+               colour = "dodgerblue", size = 1) +
+  
+  geom_point(data = nap_j %>% filter(team == "Napoli"),
+             aes(x = timestamp, y = cumsum(my_xg),
+                 shape = as.factor(ifelse(goal_YN == 1, "Goal", "No Goal")), 
+                 colour = as.factor(team)), 
+             size = 3) +
+  scale_shape_manual(name = "Esito del tiro", values = c("Goal" = 8, "No Goal" = 16)) +
+  scale_colour_manual(name = "Squadra", values = c("Napoli" = "dodgerblue", "Juventus" = "white")) +
+
+  dark_theme_gray() +
+  labs(x = "Minuto",
+       y = "xG cumulati",
+       colour = "Squadra") +
+  scale_x_continuous(breaks = seq(min(nap_j$timestamp), max(nap_j$timestamp), by = 5)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right")
+
+xg_overtime
+```
+
+

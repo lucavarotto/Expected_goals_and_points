@@ -1,0 +1,688 @@
+---
+title: "Analisi esplorativa per tesi"
+author: "Luca Varotto"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 2
+    number_section: TRUE
+    highlight: tango
+lang: ita
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.path = "../Figures/analisi_esplorativa/")
+
+library(tidyverse)
+library(pROC)
+```
+
+\newpage
+
+# Gol casa trasferta
+
+```{r}
+rm(list=ls())
+
+create_home_dummy <- function(dataset, results){
+  dataset <- left_join(dataset,
+                       results %>% dplyr::select(match_id, home_team, away_team),
+                       by=join_by(match_id==match_id))
+  dataset$home <- NA
+  for (i in 1:nrow(dataset)){
+    if (dataset[i,"team"]==dataset[i,"home_team"]){
+      dataset[i,"home"] <- "Yes"}
+    else { dataset[i,"home"] <- "No"}
+  }
+  dataset <- dataset %>% dplyr::select(!home_team)
+  dataset <- dataset %>% dplyr::select(!away_team)
+  return(dataset)
+}
+
+load("../Dataset_ausiliari/dat_uncleaned.Rdata")
+dim(dat)
+n <- nrow(dat)
+```
+
+Carico i dati per il testing.
+
+```{r}
+dat_test <- read.csv("../creazione_dataset/matches_data/SerieA_shots_2015_2016.csv")
+dat_test[dat_test == ""] <- FALSE
+res_test <- read_csv("../creazione_dataset/games_results/serieA_2015_16_games_results.csv")
+dat_test <- create_home_dummy(dat_test, res_test)
+```
+
+
+# Check undetected
+
+In molte partite una variabile non è stata rilevata, questo comporta che alcune variabili hanno una elevata frequenza della modalità "undetected".
+
+```{r}
+esplicative <- c("play_pattern","shot_body_part","shot_first_time","shot_aerial_won", "shot_one_on_one", "shot_open_goal", "shot_technique", "shot_type", "under_pressure", "home")
+
+apply(dat[,esplicative],2,function(column) table(column)/n)
+
+dat <- dat %>% mutate(play_pattern = play_pattern %>% 
+                  fct_recode("Thrown In" = "From Throw In",
+                        "Free Kick" = "From Free Kick",
+                        "Goal Kick" = "From Goal Kick",
+                        "Corner" = "From Corner",
+                        "Kick Off" = "From Kick Off",
+                        "Counter" = "From Counter",
+                        "Keeper" = "From Keeper"))
+dat_test <- dat_test %>% mutate(play_pattern = play_pattern %>% 
+                  fct_recode("Thrown In" = "From Throw In",
+                        "Free Kick" = "From Free Kick",
+                        "Goal Kick" = "From Goal Kick",
+                        "Corner" = "From Corner",
+                        "Kick Off" = "From Kick Off",
+                        "Counter" = "From Counter",
+                        "Keeper" = "From Keeper"))
+```
+
+Visto che la frequenza degli "undetected" è molto alta nelle variabili "shot_one_on_one", "shot_aerial_won" e "shot_first_time" decido di escluderle dalle successive analisi.
+
+# Un primo approccio
+
+Per prima cosa devo creare la variabile risposta ("Goal"/"No Goal") ricodificando la variabile "shot_outcome".
+
+```{r}
+unique(dat["shot_outcome"])
+dat$goal_YN <- ifelse(dat$shot_outcome=="Goal",1,0)
+```
+
+Ripeto l'operazione per il data-set di testing.
+
+```{r}
+dat_test$goal_YN <- ifelse(dat_test$shot_outcome=="Goal",1,0)
+table(dat$goal_YN)
+table(dat$goal_YN)/n
+```
+
+Noto che ho una netta predominanza di 0, ossia "non goal".
+
+## Creazione variabili
+
+Nei dati non è disponibile la distanza dalla porta e l'angolo di tiro, ma sono disponibili le coordinate (x,y), con x che rappresenta la distanza dalla propria porta ed y la distanza dalla linea laterale.
+
+A partire da queste, utilizzando le formule trigonometriche, verrano calcolati distanza e angolo di tiro. La scelta di usare queste due quantità invece che le posizioni (x,y) è per semplificare l'interpretazione.
+
+Assumiamo che il campo sia di lunghezza pari alla posizione del tiro effettuato dalla maggiore distanza e di larghezza pari alla posizione del tiro più esterno effettuato. A partire da queste assunzioni costruiamo le variabili.
+
+Grazie a questo assunto la misurà di distanza dalla porta avversaria sarà data da: \begin{equation}
+\max(y) - y
+\end{equation}
+
+```{r}
+max(dat$depth_coordinate)
+dat$depth2_coordinate <- max(dat$depth_coordinate) - dat$depth_coordinate
+```
+
+Assumiamo inoltre la simmetria del campo rispetto alla retta che va dal centro di una porta all'altra. In questo modo i tiri effettuati dal lato sinistro e dal lato destro del campo risulteranno con le stesse probabilità di successo.
+
+La nuova misura dell'ampiezza sarà quindi data da: \begin{equation}
+|x-\max(x)/2|
+\end{equation}
+
+```{r}
+max(dat$width_coordinate)/2
+dat$width2_coordinate <- abs(dat$width_coordinate-max(dat$width_coordinate)/2)
+```
+
+Usando il teorema di pitagora posso quindi calcolare la distanza dalla porta:
+
+```{r}
+dat$goal_distance <- sqrt(dat$width2_coordinate^2 + dat$depth2_coordinate^2)
+```
+
+Usando le formule trigonometriche posso calcolare l'angolo di tiro, in radianti, per poi convertirlo in gradi.
+
+```{r}
+shot_angle_rad <- atan(dat$depth2_coordinate/dat$width2_coordinate)
+
+dat$shot_angle_degree <- shot_angle_rad*180/pi
+```
+
+Ripeto le stesse operazioni nel dataset di testing.
+
+```{r}
+dat_test$width2_coordinate <- abs(dat_test$width_coordinate-max(dat_test$width_coordinate)/2)
+
+dat_test$depth2_coordinate <- max(dat_test$depth_coordinate) - dat_test$depth_coordinate
+
+dat_test$goal_distance <- sqrt(dat_test$width2_coordinate^2 + dat_test$depth2_coordinate^2)
+
+shot_angle_rad <- atan(dat_test$depth2_coordinate/dat_test$width2_coordinate)
+
+dat_test$shot_angle_degree <- shot_angle_rad*180/pi
+```
+
+## Analisi esplorativa
+
+Realizzo una piccola analisi esplorativa per le variabili trovate in precedenza.
+
+```{r distanza_dalla_porta1}
+summary(dat$goal_distance)
+
+ggplot(dat)+
+  geom_boxplot(aes(x=goal_distance))+
+  coord_flip()
+
+median(dat$goal_distance)
+
+ggplot(dat)+
+  geom_histogram(aes(x=goal_distance), bins=60)
+```
+
+Noto che il 50% delle conclusioni viene effettuata da dentro l'area di rigore (16m) o poco oltre.
+
+```{r distanza_dalla_porta2}
+ggplot(dat)+
+  geom_boxplot(aes(y=goal_distance, x=as.factor(goal_YN)))
+```
+
+Noto che in mediana i tiri che risultano in gol sono effettuati da una distanza inferiore dalla porta. Inoltre la forma delle code cambia molto.
+
+```{r angolo_di_tiro1}
+summary(dat$shot_angle_degree)
+ggplot(dat)+
+  geom_boxplot(aes(x=shot_angle_degree))+
+  coord_flip()
+median(dat$shot_angle_degree)
+```
+
+Noto che il 50% dei tiri ha un angolo rispetto alla porta superiore ai 65°, ossia la maggior parte dei tiri sono effettuati nelle posizioni più centrali del campo.
+
+```{r angolo_di_tiro2}
+ggplot(dat)+
+  geom_histogram(aes(x=shot_angle_degree), bins=60)
+
+ggplot(dat)+
+  geom_boxplot(aes(y=shot_angle_degree, x=as.factor(goal_YN))) + 
+  labs(y="Angolo di tiro", x="Goal")
+
+median(dat$shot_angle_degree[dat$goal_YN==1])
+median(dat$shot_angle_degree[dat$goal_YN==0])
+```
+
+L'angolo di tiro invece sembra avere un effetto minore sul risultato. Infatti la mediana dell'angolo dei tiri è in entrambi i casi tra 60 e 70, anche se nel caso di tiri risultanti in gol la coda sinistra è più leggera.
+
+Basandomi su altri articoli valuto la possibile esistenza di una relazione non lineare tra la distanza e la probabilità di segnare. In particolare, sapendo che applicherò una regressione logistica, divido la traformazione $logit^{-1}$ della distanza dalla porta in classi e per ogni classe calcolo la proporzione di successi ed insucessi. Successivamente valuto se la relazione tra queste due quantità è lineare.
+
+```{r}
+df <- data.frame(x=plogis(dat$goal_distance), y=dat$goal_YN)
+range(plogis(dat$goal_distance))
+summary(df)
+```
+```{r Proporzione_gol_distanza}
+df <- df %>%
+  mutate(class=cut(x, breaks=quantile(x, seq(0,1,0.025)), labels = FALSE, include.lowest = TRUE))
+
+mean_y_by_class <- df %>%
+  group_by(class) %>%
+  summarise(mean_y = mean(y, na.rm = TRUE))
+
+ggplot(mean_y_by_class, aes(x = as.factor(class), y = mean_y)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Distanza dalla porta", y = "Proporione di gol sul totale di tiri", title = "Proporzione di tiri in gol al variare della distanza") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+La relazione sembra essere lineare. Notiamo un'inflazione nella classe 10, probabilmente è dovuta ai calci di rigore. Inoltre è presente un inflazione nella classe 1.
+
+### mappa dei tiri
+
+```{r shots_map}
+library(ggsoccer)
+pitch_opta
+pitch_opta[["length"]] <-  120
+pitch_opta[["width"]] <-  80
+
+# Plot for goal_YN == 0
+dat %>% dplyr::filter(goal_YN == 0) %>% 
+  ggplot(aes(x = depth_coordinate, y = width_coordinate)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon",
+                  contour_var="density" ) +
+  annotate_pitch(alpha = 0, dimensions = pitch_opta) + 
+  theme_pitch() +
+  scale_fill_viridis_c(option = "D", guide = guide_colorbar(title = "Densità")) +  # Change the color scale if needed
+  annotate("segment", x = 30, y = 83, xend = 90, yend = 83,
+           arrow = arrow(length = unit(0.4, "cm")), linewidth = 1)
+
+# Plot for goal_YN == 1
+dat %>% dplyr::filter(goal_YN == 1) %>% 
+  ggplot(aes(x = depth_coordinate, y = width_coordinate)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon",
+                  contour_var="density" ) +
+  annotate_pitch(alpha = 0, dimensions = pitch_opta) + 
+  theme_pitch() +
+  scale_fill_viridis_c(option = "D", guide = guide_colorbar(title = "Densità"))  +
+  annotate("segment", x = 30, y = 83, xend = 90, yend = 83,
+           arrow = arrow(length = unit(0.4, "cm")), linewidth = 1)
+```
+
+# Salvataggio
+
+```{r GLM}
+for (x in esplicative){
+  dat[,x] <- as.factor(dat[,x])
+  dat_test[,x] <- as.factor(dat_test[,x])
+}
+
+dat$goal_YN <- as.factor(dat$goal_YN)
+dat_test$goal_YN <- as.factor(dat_test$goal_YN)
+
+esplicative = esplicative[esplicative!=c("shot_aerial_won", "shot_one_on_one", "shot_open_goal")]
+esplicative <- append(esplicative, "goal_distance")
+esplicative <- append(esplicative, "shot_angle_degree")
+
+dat_cleaned <- dat[,append(esplicative, "goal_YN")]
+dat_test$home = factor(dat_test$home, levels=unique(dat$home))
+
+str(dat_cleaned)
+str(dat_test)
+
+save(dat_test, file="../Dataset_ausiliari/dat_test_full.Rdata")
+
+dat_test <- dat_test %>% dplyr::select(colnames(dat_cleaned))
+
+save(dat_cleaned, file="../Dataset_ausiliari/dat_cleaned.Rdata")
+save(dat_test, file="../Dataset_ausiliari/dat_test.Rdata")
+write.csv(dat_cleaned, file="../Dataset_ausiliari/dat_cleaned.csv", row.names = F)
+```
+
+# Oversampling
+
+```{r}
+n_y <- table(dat_cleaned$goal_YN)
+n_y
+
+dat_oversampled <- ROSE::ovun.sample(goal_YN ~ ., data = dat_cleaned, method = "over", N = max(n_y)*2, seed=456)$data
+table(dat_oversampled$goal_YN)
+
+save(dat_oversampled, dat_test, file="../Dataset_ausiliari/dat_oversampled.Rdata")
+```
+
+# Undersampling
+
+```{r}
+n_y <- table(dat_cleaned$goal_YN)
+n_y
+
+apply( dat_cleaned[dat_cleaned$goal_YN==1,1:6],2, function(x) prop.table(table(x)) )
+
+dim(dat)
+dat_no_corner_goal <- dat_cleaned[!dat_cleaned$goal_YN==1 &
+                                  dat_cleaned$shot_type=="Corner",]
+
+dat_undersampled <- ROSE::ovun.sample(goal_YN ~ ., data = dat_cleaned, method = "under", N = min(n_y)*2, seed=456)$data
+table(dat_undersampled$goal_YN)
+
+save(dat_undersampled, dat_test, file="../Dataset_ausiliari/dat_undersampled.Rdata")
+```
+
+# Analisi esplorativa
+
+Fisso due colori da usare:
+
+```{r}
+library(viridis)
+clrs <- viridis(2, option="D", begin=0.3) 
+```
+
+Ora faccio le analisi esplorative univariate
+
+## play_pattern
+
+variabile che indica il tipo di azione che ha preceduto il tiro
+
+```{r}
+round(table(dat$play_pattern)/n*100,3)
+```
+
+Noto subito che ci sono molte modalità, dovrò raggrupparle.
+
+```{r play_pattern}
+dat <- dat %>% mutate(play_pattern = play_pattern %>% 
+                  fct_recode(
+                    "Rimes. lat." = "Thrown In",
+                    "Punizione" = "Free Kick",
+                    "Rinvio" = "Goal Kick",
+                    "Corner" = "Corner",
+                    "Kick Off" = "Kick Off",
+                    "Controp." = "Counter",
+                    "Portiere" = "Keeper",
+                    "Altro" = "Other",
+                    "Azione" = "Regular Play"))
+
+unique(dat$play_pattern)
+
+tab <- with(dat, table(goal_YN, play_pattern))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+df %>% 
+  ggplot(aes(x = factor(play_pattern), y = Freq, fill = goal_YN)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Azione precedente", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Vedo che le distribuzioni di $(Y|X)$ sono molto diverse, in particolare per le modalità "other" e "from counter" sembra cambiare molto tra il rapporta tra successi ed insuccessi. Le altre modalità potrei aggregarle assieme.
+
+Inoltre, noto che la modalità "other" coincide quasi interamente con i tiri su rigore.
+
+```{r}
+sum(dat$play_pattern=="Other" & dat$shot_type=="Penalty")
+sum(dat$play_pattern=="Other")
+sum(dat$shot_type=="Penalty")
+```
+
+## shot_type
+
+variabile che indica da dove è arrivato direttamente il tiro
+
+```{r}
+round(table(dat$shot_type)/n*100,3)
+```
+
+I tiri da corner potrei considerarli come outlier e toglierli dal dataset.
+
+```{r shot_type}
+dat <- dat %>% mutate(shot_type = shot_type %>% 
+                  fct_recode("Da campo aperto" = "Open Play",
+                        "Calcio di punizione" = "Free Kick",
+                        "Calcio di rigore" = "Penalty",
+                        "Corner" = "Corner"))
+
+tab <- with(dat,table(goal_YN, shot_type))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_type), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Contesto del tiro", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Anche in questo caso i calci di rigore sembrano cambiare molto la proporzione tra successi ed insuccessi. Anche nel caso dei corner la proporzione di successi ed insuccessi differisce molto.
+
+## shot_body_part
+
+variabile che indica con che parte del corpo è stato effettuato il tiro
+
+```{r}
+round(table(dat$shot_body_part)/n*100,3)
+```
+
+Noto che la modalità "other" ha poche osservazioni
+
+```{r shot_body_part}
+dat <- dat %>% mutate(shot_body_part = shot_body_part %>% 
+                  fct_recode("Piede destro" = "Right Foot",
+                        "Piede sinistro" = "Left Foot",
+                        "Testa" = "Head",
+                        "Altro" = "Other"))
+dat$shot_body_part %>% unique
+
+tab <- with(dat,table(goal_YN, shot_body_part))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_body_part), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Parte del corpo", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Le solo la modalità other sembra differenziarsi dalle altre, ma potrebbero essere sempre outlier. Non sembra essere opportuno includere tale variabile.
+
+## shot_first_time
+
+Variabile che indica se il tiro è stato eseguito al primo tocco del pallone.
+
+```{r}
+round(table(dat$shot_first_time)/n*100,3)
+```
+
+```{r shot_first_time}
+dat <- dat %>% mutate(shot_first_time = shot_first_time %>% 
+                  fct_recode("No" = "FALSE",
+                        "Sì" = "True"))
+dat$shot_first_time %>% unique
+
+tab <- with(dat,table(goal_YN, shot_first_time))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_first_time), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Tiro di prima", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+La differenza sembra minima
+
+## shot_technique
+
+Variabile che indica la tecnica di tiro
+
+```{r}
+round(table(dat$shot_technique)/n*100,3)
+```
+
+anche in questo caso ho molte modalità e diverse con bassa frequenza.
+
+```{r shot_technique}
+dat <- dat %>% mutate(shot_technique = shot_technique %>% 
+              fct_recode("Normale" = "Normal",
+                    "Rovesciata" = "Overhead Kick",
+                    "A mezz'aria" = "Half Volley",
+                    "Al volo" = "Volley",
+                    "Di testa" = "Diving Header",
+                    "Di tacco" = "Backheel",
+                    "Pallonetto" = "Lob"))
+dat$shot_technique %>% unique
+
+tab <- with(dat,table(goal_YN, shot_technique))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_technique), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Tecnica di tiro", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Le modalità "lob" e "diving header" sembrano avere un effetto sulla y. Queste modalità però hanno una bassa frequenza e posso aspettarmi che sia una correlazione spuria. Potrebbe essere legata per esempio al fatto che i tiri "lob" sono spesso effettuati in un contesto di 1 contro 1 con il portiere. Le altre modalità potrei raggrupparle.
+
+```{r}
+m <- sum(dat$shot_technique=="Lob")
+m
+sum(dat$shot_type=="Penalty")
+sum(dat$shot_type=="Penalty"&dat$shot_technique=="Lob")
+```
+
+Non sembra esserci un effetto legato ai rigori.
+
+```{r}
+sum(dat$shot_one_on_one=="True"&dat$shot_technique=="Lob") / m
+
+table(dat$shot_one_on_one)/n*100
+```
+
+Noto che tra tutti i tiri solo il 5% sono effettuati in una situazione di 1 contro 1, mentre tra i tiri "lob" questa percentuale sale al 17%
+
+## under_pressure
+
+```{r}
+round(table(dat$under_pressure)/n*100,3)
+```
+
+in questo caso ho solo due modalità
+
+```{r under_pressure}
+dat <- dat %>% mutate(under_pressure = under_pressure %>% 
+                  fct_recode("No" = "FALSE",
+                        "Sì" = "True"))
+dat$under_pressure %>% unique
+
+tab <- with(dat,table(goal_YN, under_pressure))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(under_pressure), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Sotto pressione", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Anche in questo caso l'effetto risulta minimo.
+
+## shot_aerial_won
+
+Variabile che indica se si è vinto un duello aereo prima del tiro
+
+```{r}
+round(table(dat$shot_aerial_won)/n*100,3)
+```
+
+```{r shot_aerial_won}
+dat$shot_aerial_won %>% unique
+
+tab <- with(dat,table(goal_YN, shot_aerial_won))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_aerial_won), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Duello aereo vinto", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+L'effetto sembra minimo
+
+## shot_one_on_one
+
+Variabile che indica se il tiro è stato effettuato in un contesto di uno contro uno con il portiere.
+
+```{r}
+round(table(dat$shot_one_on_one)/n*100,3)
+```
+
+Quasi in una partita su 3 tale variabile non è stata rilevata
+
+```{r shot_one_on_one}
+dat$shot_one_on_one %>% unique
+
+tab <- with(dat,table(goal_YN, shot_one_on_one))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_one_on_one), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Tiro in 1 vs 1", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Quando la variabile vale "True" la proporzione di successi è molto più alta.
+
+## shot_open_goal
+
+Variabile che indica se si è vinto un duello aereo prima del tiro
+
+```{r}
+round(table(dat$shot_open_goal)/n*100,3)
+```
+
+elevatissima frequenza in undetected.
+
+```{r shot_open_goal}
+dat$shot_open_goal %>% unique
+
+tab <- with(dat,table(goal_YN, shot_open_goal))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(shot_open_goal), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Tiro a porta vuota", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+Anche in questo caso quanto la variabile vale "True" la proporzione di successi aumenta notevolmente.
+
+## home
+
+Variabile che indica se si è vinto un duello aereo prima del tiro
+
+```{r}
+round(table(dat$home)/n*100,3)
+```
+
+elevatissima frequenza in undetected.
+
+```{r home}
+dat <- dat %>% mutate(home = home %>% 
+                  fct_recode("Trasferta" = "No",
+                        "Casa" = "Yes",
+                        "Campo neutro" = "Neutral"))
+dat$home %>% unique
+
+tab <- with(dat,table(goal_YN, home))
+tab
+prop_tab <- prop.table(tab, 1)
+df <- as.data.frame(prop_tab)
+df
+
+# Create the ggplot bar plot with custom color palette
+ggplot(df, aes(x = factor(home), y = Freq, fill = factor(goal_YN))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(x = "Casa", y = "Proporzione", fill = "Goal") +
+  scale_fill_manual(values = clrs) +
+  theme_minimal()
+```
+
+
+

@@ -1,0 +1,38 @@
+# Dati: restano nella cartella di lavoro locale
+Dataset_ausiliari/
+RF_pred/
+creazione_dataset/
+
+# Paper di riferimento di terzi: si citano, non si ridistribuiscono
+Paper/
+
+# Del report resta solo il PDF: sorgenti LaTeX, template e archivi fuori
+*.tex
+*.cls
+*.sty
+*.bib
+*.bbl
+*.blg
+*.aux
+*.bcf
+*.idx
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.zip
+Report/Varotto_Luca/
+Report/Varotto_Luca_con_ringraziamenti.pdf
+
+# PDF prodotti dal knit degli .Rmd: rigenerabili
+Codice/*.pdf
+
+# File di sessione
+.Rhistory
+.RData
+__pycache__/

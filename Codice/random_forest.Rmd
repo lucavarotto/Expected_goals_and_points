@@ -1,0 +1,201 @@
+---
+title: "Random Forest Classifier"
+author: "Luca Varotto"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 2
+    number_section: TRUE
+    highlight: tango
+lang: ita
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.path = "../Figures/RF/")
+library(tidyverse)
+library(randomForest)
+```
+
+```{r}
+rm(list=ls())
+ntree_tune <- 10000
+ntree <- 5000
+```
+
+```{r functions, include=FALSE}
+plot_var_importance <- function(RF, save_name){
+  
+clrs <- data.frame(n = colnames(dat_test %>%
+                          dplyr::select(!goal_YN))) %>% 
+  mutate(clrss = scales::hue_pal()(n()))
+  
+df <- data.frame(RF$importance %>% as.data.frame() %>% dplyr::select(MeanDecreaseAccuracy, MeanDecreaseGini),
+                 n = rownames(RF$importance) )
+df <- left_join(x=df, y=clrs, by=join_by(n))
+
+df <- df %>%
+  mutate(n = recode(n, "goal_distance"="Distanza dalla porta",
+                    "shot_angle_degree"="Angolo di tiro",
+                   "play_pattern"="Azione precedente",
+                   "shot_type"="Contesto del tiro",
+                   "shot_body_part"="Parte del corpo",
+                   "shot_technique"="Tecnica di tiro",
+                   "home"="Casa",
+                   "shot_first_time"="Tiro di prima",
+                   "under_pressure"="Sotto pressione"))
+
+df <- df %>%
+  arrange(desc(MeanDecreaseAccuracy)) %>%
+  mutate(n = factor(n, levels = n)) # Set factor levels based on the order of 'vi'
+
+ggplot(df) +
+  geom_bar(aes(y = MeanDecreaseAccuracy, x = n, fill = n), stat = "identity") +
+  theme(axis.text.x = element_blank()) +
+  labs(x = "Variabile", y = "Importanza in termini di Accuracy", fill = "Nome della variabile") +
+  scale_fill_manual(values = df$clrss, labels = df$n)
+ggsave(filename=paste0("../Figures/RF/RF_", save_name, "_accuracy.pdf"), width=165.1, height=114.3, units="mm")
+
+df <- df %>%
+  arrange(desc(MeanDecreaseGini)) %>%
+  mutate(n = factor(n, levels = n)) # Set factor levels based on the order of 'vi'
+
+ggplot(df) +
+  geom_bar(aes(y = MeanDecreaseGini, x = n, fill = n), stat = "identity") +
+  theme(axis.text.x = element_blank()) +
+  labs(x = "Variabile", y = "Importanza in termini di indice di Gini", fill = "Nome della variabile") +
+  scale_fill_manual(values = df$clrss, labels = df$n)
+ggsave(filename=paste0("../Figures/RF/RF_", save_name, "_Gini.pdf"), width=165.1, height=114.3, units="mm")
+}
+
+cm_and_fscore <- function(probs){
+  library(yardstick)
+  library(pROC)
+  my_roc <- roc(dat_test$goal_YN, probs)
+  auc <- pROC::auc(my_roc)
+  cat("AUC:", auc, "\n\n")
+  threshold <- coords(my_roc, "best", ret = "threshold",
+         best.method="closest.topleft", best.weights=c(1,mean(dat_test$goal_YN==1))) %>% as.numeric()
+  
+  cat("Soglia:", threshold, "\n\n")
+  
+  cat("\n-------------------------")
+  Fitted_goal <-  ifelse(probs >= threshold, 1, 0)
+  
+  f_score <- tibble(t=as.factor(dat_test$goal_YN),
+       e=factor(Fitted_goal, levels=c(0,1))) %>% f_meas(truth=t,
+                  estimate=e, event_level = "second") %>% dplyr::select(.estimate) %>% as.numeric()
+  cat("f-score:", f_score, "\n\n")
+  
+  caret::confusionMatrix(data=as.factor(Fitted_goal), reference=as.factor(dat_test$goal_YN))
+}
+```
+
+# Dati undersampled
+
+```{r undersampled}
+load("../Dataset_ausiliari/dat_undersampled.Rdata")
+glimpse(dat_undersampled)
+table(dat_undersampled$goal_YN)
+
+tRF <- tuneRF(x=dat_undersampled %>% dplyr::select(!goal_YN),
+       y=dat_undersampled %>% pull(goal_YN),
+       ntreeTry=ntree_tune,
+       mtryStart =4, stepFactor=1.5, improve=0,
+       trace=TRUE, plot=TRUE, doBest=FALSE)
+
+df <- tRF %>% as.data.frame()
+df
+m <- df %>% pull(OOBError) %>% which.min()
+
+source("my_randomForest.R")
+Us <- my_RF(dat_undersampled, df$mtry[m], ntree)
+cm_and_fscore(Us$rf$test$votes[,"1"])
+plot_var_importance(Us$rf, "unders")
+
+save(Us, tRF, file="../RF_pred/RF_undersampling.Rdata")
+rm(Us)
+```
+
+# Dati originali
+
+Primo approccio
+
+```{r Dati originali, eval=FALSE, include=FALSE}
+load("../Dataset_ausiliari/dat_cleaned.Rdata")
+load("../Dataset_ausiliari/dat_test.Rdata")
+str(dat_cleaned)
+str(dat_test)
+table(dat_cleaned$goal_YN)
+
+tRF <- tuneRF(x=dat_cleaned %>% dplyr::select(!goal_YN),
+       y=dat_cleaned %>% pull(goal_YN),
+       ntreeTry=ntree_tune,
+       mtryStart =4, stepFactor=1.5, improve=0,
+       trace=TRUE, plot=TRUE, doBest=FALSE)
+
+df <- tRF %>% as.data.frame()
+df
+m <- df %>% pull(OOBError) %>% which.min()
+
+source("my_randomForest.R")
+Og <- my_RF(dat_cleaned, df$mtry[m], ntree)
+cm_and_fscore(Og$rf$test$votes[,"1"])
+plot_var_importance(Og$rf, "sbilanc")
+
+save(Og, tRF, file="../RF_pred/RF_originali.Rdata")
+rm(Og)
+```
+
+# Dati oversampled
+
+```{r oversampled, eval=FALSE, include=FALSE}
+load("../Dataset_ausiliari/dat_oversampled.Rdata")
+glimpse(dat_oversampled)
+table(dat_oversampled$goal_YN)
+
+tRF <- tuneRF(x=dat_oversampled %>% dplyr::select(!goal_YN),
+       y=dat_oversampled %>% pull(goal_YN),
+       ntreeTry=ntree_tune,
+       mtryStart =4, stepFactor=1.5, improve=0,
+       trace=TRUE, plot=TRUE, doBest=FALSE)
+
+df <- tRF %>% as.data.frame()
+df
+m <- df %>% pull(OOBError) %>% which.min()
+
+Os <- my_RF(dat_oversampled, df$mtry[m], ntree)
+cm_and_fscore(Os$rf$test$votes[,"1"])
+plot_var_importance(Os$rf, "overs")
+
+save(Os, tRF, file="../RF_pred/RF_oversampling.Rdata")
+rm(Os)
+```
+
+# Dati SMOTE
+
+```{r SMOTE, eval=FALSE, include=FALSE}
+load("../Dataset_ausiliari/dat_smoothed_k11.Rdata")
+load("../Dataset_ausiliari/dat_test.Rdata")
+glimpse(dat_smoothed)
+table(dat_smoothed$goal_YN)
+
+tRF <- tuneRF(x=dat_smoothed %>% dplyr::select(!goal_YN),
+       y=dat_smoothed %>% pull(goal_YN),
+       ntreeTry=ntree_tune,
+       mtryStart =4, stepFactor=1.5, improve=0,
+       trace=TRUE, plot=TRUE, doBest=FALSE)
+
+df <- tRF %>% as.data.frame()
+df
+m <- df %>% pull(OOBError) %>% which.min()
+
+SM <- my_RF(dat_smoothed, df$mtry[m], ntree)
+cm_and_fscore(SM$rf$test$votes[,"1"])
+plot_var_importance(SM$rf, "SMOTE")
+
+save(SM, tRF, file="../RF_pred/RF_smoote.Rdata")
+rm(SM)
+```

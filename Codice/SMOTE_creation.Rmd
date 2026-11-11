@@ -1,0 +1,47 @@
+---
+title: "Create SMOTE files"
+author: "Luca Varotto"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+
+
+# Creating SMOTE
+
+```{r}
+rm(list=ls())
+load("../Dataset_ausiliari/dat_cleaned.Rdata")
+dat_cleaned[,c("goal_distance", "shot_angle_degree")] <- scale(dat_cleaned[,c("goal_distance", "shot_angle_degree")])
+write.csv(dat_cleaned, file="../Dataset_ausiliari/dat_cleaned_scaled.csv", row.names = F)
+rm(dat_cleaned)
+
+load("../Dataset_ausiliari/dat_test.Rdata")
+dat_test[,c("goal_distance", "shot_angle_degree")] <- scale(dat_test[,c("goal_distance", "shot_angle_degree")])
+save(dat_test, file="../Dataset_ausiliari/dat_test_scaled.Rdata")
+rm(dat_test)
+```
+
+# Fixing SMOTE
+
+```{r}
+library(data.table)
+f <- dir("../Dataset_ausiliari") 
+csv_files <- f[f%like% "dat_smoothed_scaled" & f%like% "csv"]
+
+for (i in 1:length(csv_files)){
+  dat_smoothed <- read.csv( paste0("../Dataset_ausiliari/", csv_files[i]) )
+  
+  dat_smoothed$under_pressure <- ifelse(dat_smoothed$under_pressure == "False", "FALSE", "True")
+  dat_smoothed$shot_first_time <- ifelse(dat_smoothed$shot_first_time == "False", "FALSE", "True")
+  
+  dat_smoothed[,c("play_pattern", "shot_body_part","shot_first_time","shot_technique","shot_type","under_pressure", "home", "goal_YN")] <- dat_smoothed[,c("play_pattern", "shot_body_part","shot_first_time","shot_technique","shot_type","under_pressure", "home", "goal_YN")] %>% mutate_all(as.factor)
+  
+  save(dat_smoothed, file=paste0("../Dataset_ausiliari/", gsub(".csv", ".Rdata", csv_files[i])))
+}
+```

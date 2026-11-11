@@ -1,0 +1,135 @@
+---
+title: "SMOTE scelta di k"
+author: "Luca Varotto"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 2
+    number_section: TRUE
+    highlight: tango
+lang: ita
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(MASS)
+library(pROC)
+library(yardstick)
+library(glmnet)
+library(rpart)
+```
+
+# Intro
+
+```{r}
+rm(list=ls())
+K <- 10
+
+fscore <- function(true, pred){
+  pred <- ifelse(pred > 0.3, 1, 0)
+  MLmetrics::F1_Score(as.factor(true), pred, positive="1")
+}
+```
+
+# k=1
+
+```{r k1}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k1.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=3
+
+```{r k3}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k3.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=5
+
+```{r k5}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k5.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=7
+
+```{r k7}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k7.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=9
+
+```{r k9}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k9.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=11
+
+```{r k11}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k11.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=13
+
+```{r k13}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k13.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=15
+
+```{r k15}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k15.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```
+
+# k=17
+
+```{r k17}
+load("../Dataset_ausiliari/dat_smoothed_scaled_k17.Rdata")
+m0 <- glm(goal_YN~., family=binomial, data=dat_smoothed)
+library(boot)
+cv.glm(data=dat_smoothed, glmfit=m0,
+       cost=fscore, K=K)$delta
+rm(dat_smoothed)
+```

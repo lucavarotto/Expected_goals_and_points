@@ -1,0 +1,175 @@
+---
+title: "Evaluation"
+author: "Luca Varotto"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 2
+    number_section: TRUE
+    highlight: tango
+lang: ita
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+# import
+
+```{r Intro}
+rm(list=ls())
+load("../Dataset_ausiliari/dat_pre_processed.Rdata")
+lm0 <- glm(goal_YN~.,dat=dat_cleaned, family=binomial)
+
+threshold <- 0.3
+p_lm0 <- predict(lm0, newdata=dat_test %>% dplyr::select(!goal_YN),
+                 type="response")
+Fitted_goal <- ifelse(p_lm0 >= threshold, 1, 0)
+cm_f <- caret::confusionMatrix(data=as.factor(Fitted_goal), reference=as.factor(dat_test$goal_YN))
+cm_f
+```
+
+# xg di statbomb
+
+```{r Intro}
+library(pROC)
+roc(response=dat_test$goal_YN, predictor=p_lm0) %>% plot(print.auc=T)
+load("../Dataset_ausiliari/dat_test_full.Rdata")
+roc(response=dat_test$goal_YN, predictor=dat_test$shot_statsbomb_xg) %>% plot(print.auc=T)
+
+tibble(t=as.factor(dat_test$goal_YN),
+        e=factor(ifelse(dat_test$shot_statsbomb_xg>0.3,1,0), levels=c(0,1))) %>%
+      yardstick::f_meas(truth=t, estimate=e, event_level = "second")
+
+tibble(t=as.factor(dat_test$goal_YN),
+        e=factor(ifelse(p_lm0>0.188,1,0), levels=c(0,1))) %>%
+      yardstick::f_meas(truth=t, estimate=e, event_level = "second")
+```
+
+# Classifica
+
+```{r import_classifica}
+load("../Dataset_ausiliari/dat_test_full.Rdata")
+glimpse(dat_test)
+
+matches_res <- read_csv("../creazione_dataset/games_results/serieA_2015_16_games_results.csv")
+glimpse(matches_res)
+```
+
+Credo un dataframe con i dati delle partite che mi interessano
+
+```{r dati_sulle_partite}
+matches_res <- matches_res %>% dplyr::select(match_id, home_team, away_team, home_score, away_score, match_week)
+
+pred <- p_lm0
+```
+
+Credo un dataframe con i dati dei tiri che mi interessano
+
+```{r dati_sui_tiri}
+df <- dat_test %>% dplyr::select(match_id, player, player_id, team, team_id, goal_YN) %>% mutate(my_xg = pred)
+```
+
+Li unisco
+
+```{r}
+df <- left_join(df, matches_res, by=join_by(match_id==match_id))
+df <- df %>% mutate(my_xg = pred)
+```
+
+Faccio MC
+
+```{r MC}
+B <- 10000
+MC <- matrix(0, nrow=760, ncol=B+2)
+
+MC[,1] <- rep(unique(df$match_id), each=2)
+
+i=1 # indice di riga
+for (match in unique(df$match_id)){
+  sub_df = df[df$match_id==match,]
+  for (team in unique(sub_df$team)){
+    MC[i,2] <- team
+    sub_sub_df = sub_df[sub_df$team==team,]
+    MC[i,3:(B+2)] = replicate(B, sum( rbinom( length (sub_sub_df$my_xg), size=1, prob=sub_sub_df$my_xg) ) )
+    i = i + 1
+  }
+}
+```
+
+Trovo gli xP
+
+```{r xP}
+g_results <- matrix(0, nrow=760, ncol=B+2)
+g_results[,1:2] <- MC[,1:2]
+
+for (col_index in 3:(B+2)){
+  for (row_index in seq(1, 760, by=2)){
+    score1 <- MC[row_index,col_index]
+    score2 <- MC[row_index+1,col_index]
+    if (score1 > score2){
+      g_results[row_index:(row_index+1),col_index] = c(3,0) }
+    else if (score1 < score2){
+      g_results[row_index:(row_index+1),col_index] = c(0,3) }
+    else{
+      g_results[row_index:(row_index+1),col_index] = c(1,1)}
+  }
+}
+
+xP <- matrix(0, 760, 3)
+xP[,1:2] <- g_results[,1:2]
+xP[,3] <- apply(g_results[,3:(B+2)], 1, function(x) mean(as.numeric(x)) )
+
+apply(g_results[g_results[,1]==3879548,3:(B+2)],2,function(x) x[1] > x[2]) %>% table()/B
+apply(g_results[g_results[,1]==3879548,3:(B+2)],2,function(x) x[1] < x[2]) %>% table()/B
+apply(g_results[g_results[,1]==3879548,3:(B+2)],2,function(x) x[1] == x[2]) %>% table()/B
+
+colnames(xP) <- c("match_id", "team_id", "xP")
+xP <- xP %>% as.data.frame() %>%
+  mutate(match_id = as.factor(match_id),
+         team_id = as.factor(team_id),
+         xP = as.numeric(xP))
+
+xP %>% as.data.frame() %>% filter(match_id=="3879548")
+```
+
+Aggrego gli xP e faccio la league table
+
+```{r league_table}
+league_table <- xP %>% group_by(team_id) %>% 
+  summarise(xP_tot = sum(xP))
+
+real_table <- read_table("../creazione_dataset/serieA_2015_16_real_table.txt")
+
+#real_table <- real_table %>% arrange(SQUADRA) %>% 
+#  mutate(id=101:120)
+#league_table <- league_table %>% arrange(team_id) %>% 
+#  mutate(id=101:120)
+
+real_table <- real_table %>% arrange(-PUNTI)
+league_table <- league_table %>% arrange(-xP_tot)
+
+xg_tot = df %>% group_by(team) %>% summarise(xG_tot = sum(my_xg))
+
+league_table <- left_join(league_table, xg_tot,
+                by=join_by(team_id == team))
+
+
+View(cbind(league_table,
+           real_table))
+```
+
+# differenza xg vs g per squadra
+
+```{r}
+goal_table <- left_join(real_table %>% dplyr::select(SQUADRA,GF),
+                        xg_tot,
+                by=join_by(SQUADRA == team)) %>% 
+  mutate(GF=GF %>% as.numeric(),
+         xG_tot=xG_tot %>% as.numeric()) %>% 
+  mutate(xG_diff = GF - xG_tot)
+```
+
